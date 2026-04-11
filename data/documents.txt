@@ -1,7 +1,0 @@
-Artificial intelligence is transforming industries.
-Machine learning enables systems to learn from data.
-Python is a popular programming language.
-Data engineering focuses on building data pipelines.
-Deep learning is a subset of machine learning.
-pizza is good.
-Smile please.
