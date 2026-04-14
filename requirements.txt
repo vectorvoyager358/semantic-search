@@ -2,3 +2,5 @@ google-genai
 python-dotenv
 numpy
 faiss-cpu
+fastapi
+pydantic
