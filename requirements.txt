@@ -4,3 +4,8 @@ numpy
 faiss-cpu
 fastapi
 pydantic
+python-multipart
+uvicorn
+
+
+
