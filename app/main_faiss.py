@@ -5,7 +5,7 @@ from app.output import rag_output
 def main():
     docs = load_documents_from_folder("data")
     store = store_creation(docs, chunk_size=3, overlap_size=1)
-    index, store = build_faiss_index(store)
+    index = build_faiss_index(store)
 
     print(f"\nLoaded {len(docs)} documents")
     print(f"Created {len(store)} chunk records")

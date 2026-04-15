@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 import uuid
+from typing import List
 from app.session_store import sessions
 
 from app.faiss_store import load_documents_from_folder, store_creation, build_faiss_index
@@ -13,15 +14,17 @@ app = FastAPI()
 class AskRequest(BaseModel):
     query: str
 
+class SourceResponse(BaseModel):
+    text: str
+    doc_id: int
+    chunk_id: int
+    distance: float
 class AskResponse(BaseModel):
     answer: str
+    sources: List[SourceResponse]
 
 class SessionResponse(BaseModel):
     session_id: str
-
-docs = load_documents_from_folder("data")
-store = store_creation(docs, chunk_size=3, overlap_size=1)
-index, store = build_faiss_index(store)
 
 
 @app.get("/")
@@ -30,15 +33,15 @@ def root():
 
 
 @app.post("/sessions/{session_id}/ask", response_model=AskResponse)
-def ask_question(request: AskRequest, session: str):
-    if session not in sessions:
+def ask_question(request: AskRequest, session_id: str):
+    if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    if sessions[session]["index"] is None or not sessions[session]["store"]:
+    if sessions[session_id]["index"] is None or not sessions[session_id]["store"]:
         raise HTTPException(status_code=400, detail="Session has no indexed documents")
-    session_index = sessions[session]["index"]
-    session_store = sessions[session]["store"]
-    answer = rag_output(request.query, session_index, session_store, top_k=3)
-    return AskResponse(answer=answer)
+    session_index = sessions[session_id]["index"]
+    session_store = sessions[session_id]["store"]
+    answer, sources = rag_output(request.query, session_index, session_store, top_k=3)
+    return AskResponse(answer=answer, sources=sources)
 
 @app.post("/sessions", response_model=SessionResponse)
 def create_session():
