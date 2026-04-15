@@ -37,7 +37,7 @@ def root():
 def ask_question(request: AskRequest, session_id: str):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    if sessions[session_id]["index"] is None or not sessions[session_id]["store"]:
+    if not sessions[session_id]["documents"]:
         raise HTTPException(status_code=400, detail="Session has no indexed documents")
 
     answer, sources = rag_output(request.query, session_id, top_k=3)
@@ -61,6 +61,6 @@ def upload_document(session_id: str, file: UploadFile = File(...)):
     content = file.file.read().decode("utf-8")
 
     sessions[session_id]["documents"].append(content)
-    store = store_creation(content, chunk_size=3, overlap_size=1)
+    store = store_creation([content], chunk_size=3, overlap_size=1)
     upsert_chunks(session_id, store)
     return {"message": "Document uploaded and indexed successfully"}

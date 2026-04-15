@@ -1,17 +1,10 @@
-import os
-from dotenv import load_dotenv
-from google import genai
+from sentence_transformers import SentenceTransformer
 
-load_dotenv()
+embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-def get_embedding(text: str) -> list:
-    """
-    Convert text to embedding vector using Gemini embeddings.
-    """
-    response = client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=[text]
-    )
-    return response.embeddings[0].values
+def get_embedding(text: str):
+    embedding = embedding_model.encode(text, normalize_embeddings=True)
+    return embedding.tolist()
+
+
