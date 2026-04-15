@@ -27,3 +27,9 @@ def upsert_chunks(session_id, store):
 
     index.upsert(vectors=records)
 
+
+def delete_session_vectors(session_id: str) -> None:
+    """Remove all vectors tagged with this session_id from the index."""
+    index = get_pinecone_index()
+    index.delete(filter={"session_id": session_id})
+
