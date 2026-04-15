@@ -1,11 +1,9 @@
 google-genai
 python-dotenv
-numpy
-faiss-cpu
 fastapi
 pydantic
 python-multipart
 uvicorn
-
+Pinecone
 
 
