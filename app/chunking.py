@@ -1,6 +1,5 @@
 import re
 from pathlib import Path
-
 from app.embedder import get_embedding
 
 def load_documents_from_folder(folder_path: str) -> list[str]:

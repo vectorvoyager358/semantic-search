@@ -1,7 +1,7 @@
 from app.embedder import get_embedding
 from app.pinecone_store import get_pinecone_index
 
-def search_pinecone(query: str, session_id, top_k: int = 3):
+def search_pinecone(query: str, session_id, top_k: int):
     index = get_pinecone_index()
     query_embedding = get_embedding(query)
 
@@ -11,9 +11,10 @@ def search_pinecone(query: str, session_id, top_k: int = 3):
         include_metadata=True,
         filter={"session_id": session_id}
     )
+    matches = response.get("matches", [])
 
     results = []
-    for match in response.matches:
+    for match in matches:
         metadata = match.metadata
         results.append({
             "text": metadata["text"],

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import uuid
 from typing import List
 from app.session_store import sessions
-
+from app.settings import CHUNK_SIZE, OVERLAP_SIZE
 from app.rag_output import rag_output
 from app.pinecone_store import upsert_chunks
 from app.chunking import store_creation
@@ -40,7 +40,7 @@ def ask_question(request: AskRequest, session_id: str):
     if not sessions[session_id]["documents"]:
         raise HTTPException(status_code=400, detail="Session has no indexed documents")
 
-    answer, sources = rag_output(request.query, session_id, top_k=3)
+    answer, sources = rag_output(request.query, session_id)
     return AskResponse(answer=answer, sources=sources)
 
 @app.post("/sessions", response_model=SessionResponse)
@@ -61,6 +61,6 @@ def upload_document(session_id: str, file: UploadFile = File(...)):
     content = file.file.read().decode("utf-8")
 
     sessions[session_id]["documents"].append(content)
-    store = store_creation([content], chunk_size=3, overlap_size=1)
+    store = store_creation([content], chunk_size=CHUNK_SIZE, overlap_size=OVERLAP_SIZE)
     upsert_chunks(session_id, store)
     return {"message": "Document uploaded and indexed successfully"}

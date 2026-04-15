@@ -17,12 +17,13 @@ def upsert_chunks(session_id, store):
             "id": f"{session_id}_{item['doc_id']}_{item['chunk_id']}",
             "values": item["embedding"],
             "metadata": {
+                "session_id": session_id,
                 "text": item["text"],
                 "doc_id": item["doc_id"],
                 "chunk_id": item["chunk_id"]
             }
         }
         records.append(record)
-    index.upsert(records)
 
+    index.upsert(vectors=records)
 
