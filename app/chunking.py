@@ -1,5 +1,3 @@
-import faiss
-import numpy as np
 import re
 from pathlib import Path
 
@@ -67,14 +65,5 @@ def store_creation(docs: list, chunk_size, overlap_size):
 
     return store
 
-def build_faiss_index(store):
-    embedding_list = []
-    for item in store:
-        embedding = item["embedding"]
-        embedding_list.append(embedding)
-    embedding_matrix = np.array(embedding_list).astype("float32")
-    dimension = embedding_matrix.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embedding_matrix)
-    return index
+
 

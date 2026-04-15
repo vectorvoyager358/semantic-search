@@ -4,8 +4,9 @@ import uuid
 from typing import List
 from app.session_store import sessions
 
-from app.faiss_store import load_documents_from_folder, store_creation, build_faiss_index
-from app.output import rag_output
+from app.rag_output import rag_output
+from app.pinecone_store import upsert_chunks
+from app.chunking import store_creation
 
 
 app = FastAPI()
@@ -38,17 +39,14 @@ def ask_question(request: AskRequest, session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     if sessions[session_id]["index"] is None or not sessions[session_id]["store"]:
         raise HTTPException(status_code=400, detail="Session has no indexed documents")
-    session_index = sessions[session_id]["index"]
-    session_store = sessions[session_id]["store"]
-    answer, sources = rag_output(request.query, session_index, session_store, top_k=3)
+
+    answer, sources = rag_output(request.query, session_id, top_k=3)
     return AskResponse(answer=answer, sources=sources)
 
 @app.post("/sessions", response_model=SessionResponse)
 def create_session():
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
-        "store": [],
-        "index": None,
         "documents": []
     }
     return SessionResponse(session_id=session_id)
@@ -63,6 +61,6 @@ def upload_document(session_id: str, file: UploadFile = File(...)):
     content = file.file.read().decode("utf-8")
 
     sessions[session_id]["documents"].append(content)
-    sessions[session_id]["store"] = store_creation(sessions[session_id]["documents"], chunk_size=3, overlap_size=1)
-    sessions[session_id]["index"] = build_faiss_index(sessions[session_id]["store"])
+    store = store_creation(content, chunk_size=3, overlap_size=1)
+    upsert_chunks(session_id, store)
     return {"message": "Document uploaded and indexed successfully"}
