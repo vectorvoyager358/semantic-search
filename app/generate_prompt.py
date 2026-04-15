@@ -1,13 +1,17 @@
-from app.faiss_search import search_faiss
+def generate_prompt(context, query):
+    prompt = f"""
+You are a helpful assistant.
 
-def generate_prompt(query: str, index, store, top_k: int = 3) -> str:
+Answer the question using only the provided context.
+If the answer is not present in the context, say:
+"I could not find the answer in the uploaded documents."
 
-    search_results = search_faiss(query, index, store, top_k)
+Context:
+{context}
 
-    texts = [result['text'] for result in search_results]
-    context = "\n\n".join(texts)
+Question:
+{query}
 
-    prompt = f"""You are a helpful assistant that answers questions using the provided context as well as your general knowledge. Use the context to answer the question as best as you can. If the context does not contain relevant information, answer based on your general knowledge. Always try to use the context if it is relevant.\n\n
-    context:\n\n{context}\n\nQuestion: {query}\nAnswer:"""
-
-    return prompt
+Answer:
+"""
+    return prompt.strip()

@@ -76,5 +76,5 @@ def build_faiss_index(store):
     dimension = embedding_matrix.shape[1]
     index = faiss.IndexFlatL2(dimension)
     index.add(embedding_matrix)
-    return index, store
+    return index
 
