@@ -7,6 +7,8 @@ load_dotenv()
 def get_pinecone_index():
     pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
     index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    if not pc or not index:
+        raise ValueError("Missing Pinecone environment variables")
     return index
 
 def upsert_chunks(session_id, store):
@@ -26,4 +28,10 @@ def upsert_chunks(session_id, store):
         records.append(record)
 
     index.upsert(vectors=records)
+
+
+def delete_session_vectors(session_id: str) -> None:
+    """Remove all vectors tagged with this session_id from the index."""
+    index = get_pinecone_index()
+    index.delete(filter={"session_id": session_id})
 
