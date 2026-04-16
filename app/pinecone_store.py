@@ -7,6 +7,8 @@ load_dotenv()
 def get_pinecone_index():
     pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
     index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    if not pc or not index:
+        raise ValueError("Missing Pinecone environment variables")
     return index
 
 def upsert_chunks(session_id, store):

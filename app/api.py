@@ -1,7 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Response
 from pydantic import BaseModel
+import os
 import uuid
 from typing import List
+from dotenv import load_dotenv
 from app.session_store import sessions
 from app.settings import CHUNK_SIZE, OVERLAP_SIZE
 from app.rag_output import rag_output
@@ -9,11 +11,20 @@ from app.pinecone_store import upsert_chunks, delete_session_vectors
 from app.chunking import store_creation
 from fastapi.middleware.cors import CORSMiddleware
 
+load_dotenv()
+
+# Comma-separated list, e.g. "http://localhost:5173,https://your-app.vercel.app"
+_cors_origins_env = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+CORS_ORIGINS = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,6 +53,11 @@ class SessionInfoResponse(BaseModel):
 @app.get("/")
 def root():
     return {"message": "RAG API is running"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.post("/sessions/{session_id}/ask", response_model=AskResponse)
