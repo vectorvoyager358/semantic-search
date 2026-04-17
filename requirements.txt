@@ -2,7 +2,7 @@ python-dotenv
 fastapi
 pydantic
 python-multipart
-uvicorn
+uvicorn[standard]
 Pinecone
 sentence_transformers
 requests
