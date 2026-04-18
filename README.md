@@ -43,11 +43,23 @@ uvicorn app.api:app --reload --host 127.0.0.1 --port 8000
 
 API base URL used by the current frontend: `http://127.0.0.1:8000`.
 
+### Docker (API + Ollama on one VM)
+
+From the repo root, copy **`.env.example`** to **`.env`** and set Pinecone and **`LLM_MODEL`** (and **`CORS_ORIGINS`** if the frontend is hosted). **`LLM_URL`** is set inside **`docker-compose.yml`** to `http://ollama:11434/api/generate` so the API talks to the Ollama service on the Compose network; you do not need to point it at `localhost` on the VM.
+
+```bash
+docker compose up -d --build
+docker compose exec ollama ollama pull <your-model>   # e.g. same name as LLM_MODEL
+```
+
+The API is on port **8000**. Ollama is **not** published to the host by default (only the `api` service can reach it). The first embedding request may be slow while **`sentence-transformers`** downloads the embedding model.
+
 ### Main HTTP routes
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Health message |
+| `GET` | `/health` | Liveness (for probes / load balancers) |
 | `POST` | `/sessions` | Create a new session (UUID) |
 | `GET` | `/sessions/{session_id}` | Session metadata (`document_count`) |
 | `DELETE` | `/sessions/{session_id}` | Remove session; deletes Pinecone vectors only if at least one document was uploaded |
