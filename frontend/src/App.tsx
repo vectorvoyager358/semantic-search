@@ -1,308 +1,89 @@
 import {
   type ChangeEvent,
+  type CSSProperties,
   type DragEvent,
-  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
+import { ChatTurnBlock } from "./components/ChatTurnBlock";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import {
+  DocumentIcon,
+  GripVerticalIcon,
+  MenuIcon,
+  MoreVerticalIcon,
+  PinIcon,
+  PlusIcon,
+  SendIcon,
+} from "./components/icons";
+import {
+  addSessionToList,
+  bootstrapSession,
+  clearSessionClientStorage,
+  errorDetailFromBody,
+  getDisplayNameForSession,
+  isSessionPinned,
+  loadTurnsFromStorage,
+  notebookCustomNameKey,
+  orderSessionsWithPins,
+  parseJsonSafe,
+  readSessionList,
+  reconcileSessionListWithServer,
+  removeSessionFromList,
+  reorderPinnedSessions,
+  reorderUnpinnedSessions,
+  resetSessionBootstrap,
+  STORAGE_SESSION_KEY,
+  toggleSessionPin,
+  turnsStorageKey,
+  type ChatTurn,
+  type SessionBootstrap,
+} from "./lib/session";
 import "./App.css";
 
-type Source = {
-  text: string;
-  doc_id: number;
-  chunk_id: number;
-  distance?: number;
+/** Min height to show Rename + Delete; flip menu up if less space below in the list. */
+const SESSION_MENU_MIN_PX = 100;
+
+type SessionDropdownState = {
+  sessionId: string;
+  rect: DOMRectReadOnly;
+  openUp: boolean;
 };
 
-type ChatTurn =
-  | { id: string; query: string; status: "pending" }
-  | {
-      id: string;
-      query: string;
-      status: "done";
-      answer: string;
-      sources: Source[];
-    }
-  | { id: string; query: string; status: "error"; message: string };
-
-function PlusIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden
-    >
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-
-function SendIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M12 19V5M5 12l7-7 7 7" />
-    </svg>
-  );
-}
-
-function MoreVerticalIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden
-    >
-      <circle cx="12" cy="5" r="2" />
-      <circle cx="12" cy="12" r="2" />
-      <circle cx="12" cy="19" r="2" />
-    </svg>
-  );
-}
-
-const NOTEBOOK_ADJECTIVES = [
-  "Calm",
-  "Quiet",
-  "Bright",
-  "Gentle",
-  "Clever",
-  "Swift",
-  "Steady",
-  "Bold",
-  "Soft",
-  "Keen",
-  "Fair",
-  "Warm",
-  "Clear",
-  "Deep",
-  "Kind",
-] as const;
-
-const NOTEBOOK_NOUNS = [
-  "Harbor",
-  "Meadow",
-  "Canyon",
-  "Ridge",
-  "Brook",
-  "Summit",
-  "Grove",
-  "Shore",
-  "Field",
-  "Creek",
-  "Basin",
-  "Dune",
-  "Glade",
-  "Fjord",
-  "Marsh",
-] as const;
-
-function notebookNameFromSessionId(id: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+function sessionMenuFixedStyle(layout: {
+  rect: DOMRectReadOnly;
+  openUp: boolean;
+}): CSSProperties {
+  const { rect, openUp } = layout;
+  if (typeof window === "undefined") {
+    return { position: "fixed", zIndex: 999_999, minWidth: "9rem" };
   }
-  const u = h >>> 0;
-  const a = NOTEBOOK_ADJECTIVES[u % NOTEBOOK_ADJECTIVES.length];
-  const b = NOTEBOOK_NOUNS[(u >>> 8) % NOTEBOOK_NOUNS.length];
-  return `${a} ${b}`;
-}
-
-const STORAGE_SESSION_KEY = "document-chat-rag-session-id";
-const SESSION_LIST_KEY = "document-chat-rag-session-list";
-const MAX_SESSIONS_IN_LIST = 40;
-
-function turnsStorageKey(sessionId: string): string {
-  return `document-chat-rag-turns:${sessionId}`;
-}
-
-function notebookCustomNameKey(sessionId: string): string {
-  return `document-chat-rag-notebook-custom:${sessionId}`;
-}
-
-function readSessionList(): string[] {
-  try {
-    const raw = localStorage.getItem(SESSION_LIST_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((x): x is string => typeof x === "string");
-  } catch {
-    return [];
-  }
-}
-
-function writeSessionList(ids: string[]) {
-  localStorage.setItem(
-    SESSION_LIST_KEY,
-    JSON.stringify(ids.slice(0, MAX_SESSIONS_IN_LIST)),
-  );
-}
-
-function addSessionToList(id: string) {
-  const next = [id, ...readSessionList().filter((x) => x !== id)];
-  writeSessionList(next);
-}
-
-function removeSessionFromList(id: string) {
-  writeSessionList(readSessionList().filter((x) => x !== id));
-}
-
-function clearSessionClientStorage(id: string): void {
-  sessionStorage.removeItem(turnsStorageKey(id));
-  sessionStorage.removeItem(notebookCustomNameKey(id));
-}
-
-function getDisplayNameForSession(id: string): string {
-  const custom = sessionStorage.getItem(notebookCustomNameKey(id))?.trim();
-  if (custom) return custom;
-  return notebookNameFromSessionId(id);
-}
-
-function isChatTurn(v: unknown): v is ChatTurn {
-  if (!v || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  if (
-    typeof o.id !== "string" ||
-    typeof o.query !== "string" ||
-    typeof o.status !== "string"
-  ) {
-    return false;
-  }
-  if (o.status === "pending") return true;
-  if (o.status === "error") return typeof o.message === "string";
-  if (o.status === "done") {
-    return typeof o.answer === "string" && Array.isArray(o.sources);
-  }
-  return false;
-}
-
-function sanitizeTurns(raw: unknown): ChatTurn[] {
-  if (!Array.isArray(raw)) return [];
-  const out: ChatTurn[] = [];
-  for (const item of raw) {
-    if (!isChatTurn(item)) continue;
-    if (item.status === "pending") {
-      out.push({
-        id: item.id,
-        query: item.query,
-        status: "error",
-        message: "This reply was interrupted (e.g. refresh). Ask again.",
-      });
-      continue;
-    }
-    out.push(item);
-  }
-  return out;
-}
-
-function loadTurnsFromStorage(sessionId: string): ChatTurn[] {
-  try {
-    const raw = sessionStorage.getItem(turnsStorageKey(sessionId));
-    if (!raw) return [];
-    return sanitizeTurns(JSON.parse(raw) as unknown);
-  } catch {
-    return [];
-  }
-}
-
-type SessionBootstrap = { sessionId: string; turns: ChatTurn[] };
-
-let sessionBootstrapPromise: Promise<SessionBootstrap> | null = null;
-
-function bootstrapSession(apiBase: string): Promise<SessionBootstrap> {
-  if (!sessionBootstrapPromise) {
-    sessionBootstrapPromise = (async (): Promise<SessionBootstrap> => {
-      const stored = sessionStorage.getItem(STORAGE_SESSION_KEY);
-      if (stored) {
-        const check = await fetch(`${apiBase}/sessions/${stored}`);
-        if (check.ok) {
-          return { sessionId: stored, turns: loadTurnsFromStorage(stored) };
+  const gap = 6;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  return {
+    position: "fixed",
+    right: Math.max(8, vw - rect.right),
+    zIndex: 999_999,
+    minWidth: "9rem",
+    margin: 0,
+    ...(openUp
+      ? {
+          bottom: vh - rect.top + gap,
+          top: "auto",
         }
-        sessionStorage.removeItem(STORAGE_SESSION_KEY);
-        sessionStorage.removeItem(turnsStorageKey(stored));
-        sessionStorage.removeItem(notebookCustomNameKey(stored));
-        removeSessionFromList(stored);
-      }
-
-      const res = await fetch(`${apiBase}/sessions`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to create session");
-      const data = await res.json();
-      const id = data.session_id as string;
-      sessionStorage.setItem(STORAGE_SESSION_KEY, id);
-      return { sessionId: id, turns: [] };
-    })().catch((err: unknown) => {
-      sessionBootstrapPromise = null;
-      throw err;
-    });
-  }
-  return sessionBootstrapPromise;
-}
-
-/**
- * Session ids in localStorage survive browser restarts; the API keeps sessions in memory only.
- * Drop list entries that return 404 and clear their client storage so the sidebar matches the server.
- */
-async function reconcileSessionListWithServer(
-  apiBase: string,
-  preferredActiveId: string,
-): Promise<string[]> {
-  const raw = readSessionList();
-  const seen = new Set<string>();
-  const orderedUnique = raw.filter((id) => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-
-  const okIds = new Set<string>();
-  await Promise.all(
-    orderedUnique.map(async (id) => {
-      try {
-        const res = await fetch(`${apiBase}/sessions/${id}`);
-        if (res.ok) okIds.add(id);
-      } catch {
-        /* offline or error — treat as gone */
-      }
-    }),
-  );
-
-  for (const id of orderedUnique) {
-    if (!okIds.has(id)) {
-      clearSessionClientStorage(id);
-    }
-  }
-
-  const pruned = orderedUnique.filter((id) => okIds.has(id));
-  const next = pruned.includes(preferredActiveId)
-    ? pruned
-    : [preferredActiveId, ...pruned.filter((x) => x !== preferredActiveId)];
-
-  writeSessionList(next);
-  return next;
+      : {
+          top: Math.max(8, rect.bottom + gap),
+          bottom: "auto",
+        }),
+  };
 }
 
 function App() {
@@ -313,115 +94,187 @@ function App() {
   const [uploadLoading, setUploadLoading] = useState<boolean>(false);
   const [askLoading, setAskLoading] = useState<boolean>(false);
   const [uploadMessage, setUploadMessage] = useState<string>("");
+  const [uploadStatusTone, setUploadStatusTone] = useState<
+    "neutral" | "error" | "success"
+  >("neutral");
   const [copyId, setCopyId] = useState<string | null>(null);
   const [mainDragActive, setMainDragActive] = useState<boolean>(false);
-  const [notebookCustomName, setNotebookCustomName] = useState<string>("");
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(
     null,
   );
-  const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(
+  const [sessionDropdown, setSessionDropdown] =
+    useState<SessionDropdownState | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string>("");
+  const [initPhase, setInitPhase] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [initError, setInitError] = useState<string>("");
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 720px)").matches,
+  );
+  const [sessionDragId, setSessionDragId] = useState<string | null>(null);
+  const [sessionDropTargetId, setSessionDropTargetId] = useState<string | null>(
     null,
   );
-  const [renameDraft, setRenameDraft] = useState<string>("");
+  const sessionDragRef = useRef<{
+    id: string;
+    kind: "pinned" | "unpinned";
+  } | null>(null);
 
   const renameInputId = useId();
   const composerFileInputId = useId();
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+  const sidebarListRef = useRef<HTMLUListElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameBoxRef = useRef<HTMLDivElement>(null);
+  const renameDraftRef = useRef(renameDraft);
   const composerFileInputRef = useRef<HTMLInputElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  renameDraftRef.current = renameDraft;
 
   const API_BASE =
     import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-  const createNewNotebook = async () => {
+  const closeSessionMenu = useCallback(() => {
+    setSessionDropdown(null);
+  }, []);
+
+  const closeMobileSessions = useCallback(() => {
+    setMobileSessionsOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const apply = () => {
+      const narrow = mq.matches;
+      setIsMobileLayout(narrow);
+      if (!narrow) setMobileSessionsOpen(false);
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileSessionsOpen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setMobileSessionsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileSessionsOpen]);
+
+  useEffect(() => {
+    if (!mobileSessionsOpen || !isMobileLayout) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [mobileSessionsOpen, isMobileLayout]);
+
+  const applyBootstrapSuccess = useCallback(
+    async (
+      result: SessionBootstrap,
+      options?: { isCancelled?: () => boolean },
+    ) => {
+      const aborted = () => options?.isCancelled?.() ?? false;
+      if (aborted()) return;
+      let sid = result.sessionId;
+      let restored = result.turns;
+      const latest = sessionStorage.getItem(STORAGE_SESSION_KEY);
+      if (latest && latest !== sid) {
+        sid = latest;
+        restored = loadTurnsFromStorage(latest);
+      }
+      addSessionToList(sid);
+      const validList = await reconcileSessionListWithServer(API_BASE, sid);
+      if (aborted()) return;
+      setSessionList(orderSessionsWithPins(validList));
+      setSessionId(sid);
+      setTurns(restored);
+      setInitPhase("ready");
+      setInitError("");
+    },
+    [API_BASE],
+  );
+
+  const createNewNotebook = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/sessions`, { method: "POST" });
       if (!res.ok) throw new Error("Failed to create session");
-      const data = await res.json();
-      const id = data.session_id as string;
+      const data = (await res.json()) as { session_id?: string };
+      const id = data.session_id;
+      if (typeof id !== "string") throw new Error("Invalid session response");
       addSessionToList(id);
       sessionStorage.setItem(STORAGE_SESSION_KEY, id);
       const validList = await reconcileSessionListWithServer(API_BASE, id);
-      setSessionList(validList);
+      setSessionList(orderSessionsWithPins(validList));
       setSessionId(id);
       setTurns([]);
-      setNotebookCustomName("");
       setRenamingSessionId(null);
-      setOpenMenuSessionId(null);
+      closeSessionMenu();
       setUploadMessage("");
+      setUploadStatusTone("neutral");
+      setInitPhase("ready");
+      setInitError("");
     } catch (e) {
       console.error(e);
+      const msg =
+        e instanceof Error ? e.message : "Could not create a notebook.";
+      setInitError(msg);
+      setInitPhase("error");
     }
-  };
+  }, [API_BASE, closeSessionMenu]);
 
-  const selectSession = async (id: string) => {
-    if (id === sessionId) return;
-    setOpenMenuSessionId(null);
-    const check = await fetch(`${API_BASE}/sessions/${id}`);
-    if (!check.ok) {
-      removeSessionFromList(id);
-      const list = readSessionList();
-      setSessionList(list);
-      if (sessionId === id) {
-        if (list[0]) {
-          sessionStorage.setItem(STORAGE_SESSION_KEY, list[0]);
-          setSessionId(list[0]);
-          setTurns(loadTurnsFromStorage(list[0]));
-          setNotebookCustomName(
-            sessionStorage.getItem(notebookCustomNameKey(list[0])) ?? "",
-          );
-        } else {
-          await createNewNotebook();
-        }
+  const selectSession = useCallback(
+    async (id: string) => {
+      if (id === sessionId) return;
+      closeSessionMenu();
+      const check = await fetch(`${API_BASE}/sessions/${id}`);
+      if (!check.ok) {
+        removeSessionFromList(id);
+        setSessionList(orderSessionsWithPins(readSessionList()));
+        return;
       }
-      return;
-    }
-    sessionStorage.setItem(STORAGE_SESSION_KEY, id);
-    setSessionId(id);
-    setTurns(loadTurnsFromStorage(id));
-    setNotebookCustomName(
-      sessionStorage.getItem(notebookCustomNameKey(id)) ?? "",
-    );
-    setUploadMessage("");
-  };
+      sessionStorage.setItem(STORAGE_SESSION_KEY, id);
+      setSessionId(id);
+      setTurns(loadTurnsFromStorage(id));
+      setUploadMessage("");
+      setUploadStatusTone("neutral");
+    },
+    [API_BASE, sessionId, closeSessionMenu],
+  );
 
   useEffect(() => {
     let cancelled = false;
     bootstrapSession(API_BASE)
-      .then(async (result) => {
-        if (cancelled) return;
-        let sid = result.sessionId;
-        let restored = result.turns;
-        const latest = sessionStorage.getItem(STORAGE_SESSION_KEY);
-        if (latest && latest !== sid) {
-          sid = latest;
-          restored = loadTurnsFromStorage(latest);
-        }
-        addSessionToList(sid);
-        const validList = await reconcileSessionListWithServer(API_BASE, sid);
-        if (cancelled) return;
-        setSessionList(validList);
-        setSessionId(sid);
-        setTurns(restored);
-      })
+      .then((result) =>
+        applyBootstrapSuccess(result, { isCancelled: () => cancelled }),
+      )
       .catch((error: unknown) => {
-        if (!cancelled) console.error("Failed to init session:", error);
+        if (cancelled) return;
+        const msg =
+          error instanceof Error
+            ? error.message
+            : "Could not reach the API. Is the server running?";
+        setInitError(msg);
+        setInitPhase("error");
+        console.error("Failed to init session:", error);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (!sessionId) {
-      setNotebookCustomName("");
-      return;
-    }
-    setNotebookCustomName(
-      sessionStorage.getItem(notebookCustomNameKey(sessionId)) ?? "",
-    );
-  }, [sessionId]);
+  }, [API_BASE, applyBootstrapSuccess]);
 
   useEffect(() => {
     if (renamingSessionId === null) return;
@@ -430,17 +283,41 @@ function App() {
   }, [renamingSessionId]);
 
   useEffect(() => {
-    if (openMenuSessionId === null) return;
-    const onDocMouseDown = (e: globalThis.MouseEvent) => {
+    if (sessionDropdown === null) return;
+    const listEl = sidebarListRef.current;
+    const onListScroll = () => closeSessionMenu();
+    listEl?.addEventListener("scroll", onListScroll, { passive: true });
+    return () => listEl?.removeEventListener("scroll", onListScroll);
+  }, [sessionDropdown, closeSessionMenu]);
+
+  useEffect(() => {
+    if (sessionDropdown === null) return;
+    const onDocPointerDown = (e: PointerEvent) => {
       const el = e.target;
       if (!(el instanceof Element)) return;
-      if (!el.closest("[data-session-menu-root]")) {
-        setOpenMenuSessionId(null);
-      }
+      if (!el.closest("[data-session-menu-root]")) closeSessionMenu();
     };
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [openMenuSessionId]);
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") closeSessionMenu();
+    };
+    /* Defer so the same gesture that opened the menu doesn’t hit “outside” first. */
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onDocPointerDown, true);
+    }, 0);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", onDocPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [sessionDropdown, closeSessionMenu]);
+
+  useEffect(() => {
+    if (sessionDropdown === null) return;
+    const onResize = () => closeSessionMenu();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [sessionDropdown, closeSessionMenu]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -464,14 +341,37 @@ function App() {
     return () => window.clearTimeout(t);
   }, [copyId]);
 
+  const syncComposerHeight = useCallback(() => {
+    const el = composerTextareaRef.current;
+    if (!el) return;
+    const styles = getComputedStyle(el);
+    const min = parseFloat(styles.minHeight) || 36;
+    const maxRaw = styles.maxHeight;
+    const maxParsed = parseFloat(maxRaw);
+    const max = Number.isFinite(maxParsed) ? maxParsed : 320;
+    el.style.height = "auto";
+    const next = Math.min(Math.max(el.scrollHeight, min), max);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, []);
+
+  useLayoutEffect(() => {
+    syncComposerHeight();
+    const onResize = () => syncComposerHeight();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [query, syncComposerHeight]);
+
   const performUpload = async (f: File) => {
     if (!sessionId) return;
     if (!f.name.toLowerCase().endsWith(".txt")) {
+      setUploadStatusTone("error");
       setUploadMessage("Only .txt files are supported.");
       return;
     }
     setUploadLoading(true);
     setUploadMessage("");
+    setUploadStatusTone("neutral");
     try {
       const formData = new FormData();
       formData.append("file", f);
@@ -479,10 +379,18 @@ function App() {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Upload failed");
-      setUploadMessage(data.message || "Uploaded.");
+      const data = await parseJsonSafe(res);
+      if (!res.ok) {
+        throw new Error(
+          errorDetailFromBody(data) ?? `Upload failed (${res.status})`,
+        );
+      }
+      setUploadStatusTone("success");
+      setUploadMessage(
+        typeof data.message === "string" ? data.message : "Uploaded.",
+      );
     } catch (error: unknown) {
+      setUploadStatusTone("error");
       const msg = error instanceof Error ? error.message : "Upload failed";
       setUploadMessage(msg);
     } finally {
@@ -505,6 +413,13 @@ function App() {
   const handleMainDragLeave = (e: DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    const related = e.relatedTarget;
+    if (
+      related instanceof Node &&
+      mainScrollRef.current?.contains(related)
+    ) {
+      return;
+    }
     setMainDragActive(false);
   };
 
@@ -516,92 +431,139 @@ function App() {
     if (dropped) void performUpload(dropped);
   };
 
-  const handleAsk = async () => {
-    if (!query.trim() || !sessionId) return;
+  const submitAsk = useCallback(
+    async (q: string, existingTurnId?: string) => {
+      if (!sessionId) return;
 
-    const q = query.trim();
-    const id = crypto.randomUUID();
-    setTurns((t) => [...t, { id, query: q, status: "pending" }]);
-    setQuery("");
-    setAskLoading(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/ask`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query: q }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || "Question failed");
+      const id = existingTurnId ?? crypto.randomUUID();
+      if (existingTurnId) {
+        setTurns((t) =>
+          t.map((turn) =>
+            turn.id === id ? { id, query: q, status: "pending" as const } : turn,
+          ),
+        );
+      } else {
+        setTurns((t) => [...t, { id, query: q, status: "pending" as const }]);
+        setQuery("");
       }
+      setAskLoading(true);
 
-      setTurns((t) =>
-        t.map((turn) =>
-          turn.id === id
-            ? {
-                id,
-                query: q,
-                status: "done",
-                answer: data.answer,
-                sources: data.sources || [],
-              }
-            : turn,
-        ),
-      );
-    } catch (error: unknown) {
-      const msg =
-        error instanceof Error ? error.message : "Something went wrong";
-      setTurns((t) =>
-        t.map((turn) =>
-          turn.id === id ? { id, query: q, status: "error", message: msg } : turn,
-        ),
-      );
-    } finally {
-      setAskLoading(false);
-    }
+      try {
+        const res = await fetch(`${API_BASE}/sessions/${sessionId}/ask`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query: q }),
+        });
+
+        const data = await parseJsonSafe(res);
+
+        if (!res.ok) {
+          throw new Error(
+            errorDetailFromBody(data) ?? `Question failed (${res.status})`,
+          );
+        }
+
+        const answer = data.answer;
+        const sources = data.sources;
+        if (typeof answer !== "string") {
+          throw new Error("Invalid response from server");
+        }
+
+        setTurns((t) =>
+          t.map((turn) =>
+            turn.id === id
+              ? {
+                  id,
+                  query: q,
+                  status: "done",
+                  answer,
+                  sources: Array.isArray(sources) ? sources : [],
+                }
+              : turn,
+          ),
+        );
+      } catch (error: unknown) {
+        const msg =
+          error instanceof Error ? error.message : "Something went wrong";
+        setTurns((t) =>
+          t.map((turn) =>
+            turn.id === id
+              ? { id, query: q, status: "error", message: msg }
+              : turn,
+          ),
+        );
+      } finally {
+        setAskLoading(false);
+      }
+    },
+    [sessionId, API_BASE],
+  );
+
+  const handleAsk = () => {
+    if (!query.trim() || !sessionId) return;
+    void submitAsk(query.trim());
   };
+
+  const retryErrorTurn = useCallback(
+    (turnId: string, q: string) => {
+      void submitAsk(q, turnId);
+    },
+    [submitAsk],
+  );
 
   const handleTextareaKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter") return;
-    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.shiftKey) return;
     e.preventDefault();
     if (!askLoading && query.trim()) void handleAsk();
   };
 
-  const clearChat = () => setTurns([]);
-
-  const copyAnswer = async (turnId: string, text: string) => {
+  const copyAnswer = useCallback(async (turnId: string, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopyId(turnId);
     } catch {
       setCopyId(null);
     }
-  };
-
-  const isMac =
-    typeof navigator !== "undefined" &&
-    /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent);
-
-  const notebookTitle =
-    sessionId && notebookCustomName.trim()
-      ? notebookCustomName.trim()
-      : sessionId
-        ? notebookNameFromSessionId(sessionId)
-        : "";
+  }, []);
 
   const openSessionMenu = (e: MouseEvent, id: string) => {
     e.stopPropagation();
-    setOpenMenuSessionId((prev) => (prev === id ? null : id));
+    setSessionDropdown((prev) => {
+      if (prev?.sessionId === id) {
+        return null;
+      }
+      const btn = e.currentTarget;
+      const listEl = sidebarListRef.current;
+      const vh =
+        typeof window !== "undefined" ? window.innerHeight : SESSION_MENU_MIN_PX;
+      if (btn instanceof HTMLElement && listEl) {
+        const listRect = listEl.getBoundingClientRect();
+        const rect = btn.getBoundingClientRect();
+        const spaceBelowList = listRect.bottom - rect.bottom;
+        const spaceBelowViewport = vh - rect.bottom;
+        const spaceAboveViewport = rect.top;
+        const tightBelow =
+          spaceBelowList < SESSION_MENU_MIN_PX ||
+          spaceBelowViewport < SESSION_MENU_MIN_PX;
+        const openUp =
+          tightBelow && spaceAboveViewport >= 40;
+        return { sessionId: id, rect, openUp };
+      }
+      if (btn instanceof HTMLElement) {
+        const rect = btn.getBoundingClientRect();
+        const spaceBelowViewport = vh - rect.bottom;
+        const openUp = spaceBelowViewport < SESSION_MENU_MIN_PX;
+        return { sessionId: id, rect, openUp };
+      }
+      return null;
+    });
   };
 
   const startRenameForSession = (id: string) => {
-    setOpenMenuSessionId(null);
+    closeSessionMenu();
     setRenamingSessionId(id);
     setRenameDraft(getDisplayNameForSession(id));
   };
@@ -611,99 +573,280 @@ function App() {
     setRenameDraft("");
   };
 
-  const commitRename = () => {
-    const target = renamingSessionId;
-    if (!target) return;
-    const trimmed = renameDraft.trim();
+  const applySessionRename = useCallback((sessionKey: string, draft: string) => {
+    const trimmed = draft.trim();
     if (!trimmed) {
-      sessionStorage.removeItem(notebookCustomNameKey(target));
-      if (target === sessionId) setNotebookCustomName("");
+      sessionStorage.removeItem(notebookCustomNameKey(sessionKey));
     } else {
-      sessionStorage.setItem(notebookCustomNameKey(target), trimmed);
-      if (target === sessionId) setNotebookCustomName(trimmed);
+      sessionStorage.setItem(notebookCustomNameKey(sessionKey), trimmed);
     }
     setRenamingSessionId(null);
     setRenameDraft("");
-    setSessionList([...readSessionList()]);
+    setSessionList(orderSessionsWithPins(readSessionList()));
+  }, []);
+
+  const commitRename = useCallback(() => {
+    if (!renamingSessionId) return;
+    applySessionRename(renamingSessionId, renameDraft);
+  }, [renamingSessionId, renameDraft, applySessionRename]);
+
+  useEffect(() => {
+    if (renamingSessionId === null) return;
+    const id = renamingSessionId;
+    const onPointerDown = (e: PointerEvent) => {
+      const root = renameBoxRef.current;
+      if (!root || root.contains(e.target as Node)) return;
+      applySessionRename(id, renameDraftRef.current);
+    };
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true);
+    }, 0);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [renamingSessionId, applySessionRename]);
+
+  const requestDeleteSession = (id: string) => {
+    closeSessionMenu();
+    setDeleteTarget({
+      id,
+      label: getDisplayNameForSession(id),
+    });
   };
 
-  const confirmDeleteSession = async (id: string) => {
-    const label = getDisplayNameForSession(id);
-    if (
-      !window.confirm(
-        `Delete "${label}"? Chat history and indexed documents for this notebook will be removed.`,
-      )
-    ) {
-      return;
-    }
-    setOpenMenuSessionId(null);
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${id}`, {
-        method: "DELETE",
-      });
-      if (!res.ok && res.status !== 404) {
-        console.error("Delete session failed", res.status);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    clearSessionClientStorage(id);
-    removeSessionFromList(id);
-    const list = readSessionList();
-    setSessionList(list);
-    if (renamingSessionId === id) {
-      setRenamingSessionId(null);
-      setRenameDraft("");
-    }
-
-    if (sessionId !== id) return;
-
-    if (list[0]) {
-      sessionStorage.setItem(STORAGE_SESSION_KEY, list[0]);
-      setSessionId(list[0]);
-      setTurns(loadTurnsFromStorage(list[0]));
-      setNotebookCustomName(
-        sessionStorage.getItem(notebookCustomNameKey(list[0])) ?? "",
-      );
-    } else {
-      await createNewNotebook();
-    }
+  const togglePinForSession = (id: string) => {
+    closeSessionMenu();
+    toggleSessionPin(id);
+    setSessionList(orderSessionsWithPins(readSessionList()));
   };
 
-  const handleRenameSubmit = (e: FormEvent) => {
+  const endSessionDrag = useCallback(() => {
+    sessionDragRef.current = null;
+    setSessionDragId(null);
+    setSessionDropTargetId(null);
+  }, []);
+
+  const moveSessionIdInSubgroup = (
+    orderedIds: string[],
+    draggedId: string,
+    targetId: string,
+  ): string[] | null => {
+    const from = orderedIds.indexOf(draggedId);
+    const to = orderedIds.indexOf(targetId);
+    if (from < 0 || to < 0 || from === to) return null;
+    const next = [...orderedIds];
+    next.splice(from, 1);
+    const insertAt = from < to ? to - 1 : to;
+    next.splice(insertAt, 0, draggedId);
+    return next;
+  };
+
+  const handleSessionDragHandleStart = (
+    e: DragEvent<HTMLButtonElement>,
+    id: string,
+  ) => {
+    e.stopPropagation();
+    const kind = isSessionPinned(id) ? "pinned" : "unpinned";
+    sessionDragRef.current = { id, kind };
+    setSessionDragId(id);
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.setData("text/x-session-reorder-kind", kind);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleSessionRowDragOver = (
+    e: DragEvent<HTMLDivElement>,
+    targetId: string,
+  ) => {
+    const drag = sessionDragRef.current;
+    if (!drag || drag.id === targetId) return;
+    const targetPinned = isSessionPinned(targetId);
+    if (drag.kind === "pinned" && !targetPinned) return;
+    if (drag.kind === "unpinned" && targetPinned) return;
     e.preventDefault();
-    commitRename();
+    e.dataTransfer.dropEffect = "move";
+    setSessionDropTargetId(targetId);
   };
+
+  const handleSessionRowDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    const related = e.relatedTarget;
+    if (related instanceof Node && e.currentTarget.contains(related)) return;
+    setSessionDropTargetId(null);
+  };
+
+  const handleSessionRowDrop = (
+    e: DragEvent<HTMLDivElement>,
+    targetId: string,
+  ) => {
+    e.preventDefault();
+    const fromData = e.dataTransfer.getData("text/plain");
+    const kindData = e.dataTransfer.getData("text/x-session-reorder-kind");
+    const drag = sessionDragRef.current;
+    const draggedId = fromData || drag?.id || "";
+    const kind: "pinned" | "unpinned" | null =
+      kindData === "pinned" || kindData === "unpinned"
+        ? kindData
+        : drag?.kind ?? null;
+    try {
+      if (
+        !draggedId ||
+        !kind ||
+        draggedId === targetId ||
+        (kind === "pinned") !== isSessionPinned(targetId)
+      ) {
+        return;
+      }
+      if (kind === "pinned") {
+        const group = sessionList.filter((sid) => isSessionPinned(sid));
+        const next = moveSessionIdInSubgroup(group, draggedId, targetId);
+        if (next) reorderPinnedSessions(next);
+      } else {
+        const group = sessionList.filter((sid) => !isSessionPinned(sid));
+        const next = moveSessionIdInSubgroup(group, draggedId, targetId);
+        if (next) reorderUnpinnedSessions(next);
+      }
+      setSessionList(readSessionList());
+    } finally {
+      endSessionDrag();
+    }
+  };
+
+  const runDeleteSession = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`${API_BASE}/sessions/${id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok && res.status !== 404) {
+          console.error("Delete session failed", res.status);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      clearSessionClientStorage(id);
+      removeSessionFromList(id);
+      const list = readSessionList();
+      setSessionList(orderSessionsWithPins(list));
+      if (renamingSessionId === id) {
+        setRenamingSessionId(null);
+        setRenameDraft("");
+      }
+
+      if (sessionId !== id) return;
+
+      if (list[0]) {
+        sessionStorage.setItem(STORAGE_SESSION_KEY, list[0]);
+        setSessionId(list[0]);
+        setTurns(loadTurnsFromStorage(list[0]));
+      } else {
+        await createNewNotebook();
+      }
+    },
+    [API_BASE, sessionId, renamingSessionId, createNewNotebook],
+  );
 
   const handleRenameKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       cancelRename();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitRename();
     }
   };
 
+  const skipToMain = () => {
+    mainScrollRef.current?.focus();
+  };
+
   return (
-    <div className="app-shell">
-      <div className="app-shell__brand-bar" aria-hidden="true" />
+    <div
+      className={
+        mobileSessionsOpen
+          ? "app-shell app-shell--mobile-drawer-open"
+          : "app-shell"
+      }
+    >
+      <a
+        href="#main-chat"
+        className="skip-link"
+        onClick={(e) => {
+          e.preventDefault();
+          skipToMain();
+        }}
+      >
+        Skip to conversation
+      </a>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete notebook?"
+        message={
+          deleteTarget
+            ? `“${deleteTarget.label}” and its chat history will be removed.`
+            : ""
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          const id = deleteTarget.id;
+          setDeleteTarget(null);
+          await runDeleteSession(id);
+        }}
+      />
       <div className="app-layout">
-        <aside className="app-sidebar" aria-label="Notebooks">
-          <div className="app-sidebar__brand">Document Chat</div>
+        <button
+          type="button"
+          className="app-mobile-backdrop"
+          aria-label="Close sessions menu"
+          tabIndex={mobileSessionsOpen ? 0 : -1}
+          onClick={closeMobileSessions}
+        />
+        <aside
+          id="sessions-drawer"
+          className="app-sidebar"
+          aria-label="Notebooks"
+          aria-hidden={
+            isMobileLayout && !mobileSessionsOpen ? true : undefined
+          }
+          {...(isMobileLayout && !mobileSessionsOpen ? { inert: true } : {})}
+        >
+          <header className="app-sidebar__header">
+            <div className="app-sidebar__brand">Document Chat</div>
+            <p className="app-sidebar__tagline">
+              RAG over your text files
+            </p>
+          </header>
           <button
             type="button"
             className="app-sidebar__new"
-            onClick={() => void createNewNotebook()}
+            onClick={() => {
+              closeMobileSessions();
+              void createNewNotebook();
+            }}
+            disabled={initPhase === "loading"}
           >
-            + New notebook
+            <PlusIcon className="app-sidebar__new-icon" aria-hidden />
+            New notebook
           </button>
           <div className="app-sidebar__section-label">Sessions</div>
-          <ul className="app-sidebar__list">
+          <ul className="app-sidebar__list" ref={sidebarListRef}>
+            {sessionList.length === 0 && initPhase === "ready" ? (
+              <li className="app-sidebar__empty">
+                No notebooks yet. Create one to begin.
+              </li>
+            ) : null}
             {sessionList.map((id) => (
               <li key={id} className="app-sidebar__li">
                 {renamingSessionId === id ? (
-                  <form
+                  <div
+                    ref={renameBoxRef}
                     className="app-sidebar__rename"
-                    onSubmit={handleRenameSubmit}
-                    onClick={(e) => e.stopPropagation()}
                   >
                     <label className="visually-hidden" htmlFor={renameInputId}>
                       Notebook name
@@ -712,44 +855,57 @@ function App() {
                       ref={renameInputRef}
                       id={renameInputId}
                       type="text"
-                      className="app__workspace-input"
+                      className="app-sidebar__rename-input"
                       value={renameDraft}
                       onChange={(e) => setRenameDraft(e.target.value)}
                       onKeyDown={handleRenameKeyDown}
                       maxLength={80}
                       autoComplete="off"
                     />
-                    <div className="app__workspace-rename-actions">
-                      <button type="submit" className="btn btn--primary btn--sm">
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn--ghost btn--sm"
-                        onClick={cancelRename}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
+                  </div>
                 ) : (
                   <div
-                    className={
-                      id === sessionId
-                        ? "app-sidebar__row app-sidebar__row--active"
-                        : "app-sidebar__row"
-                    }
+                    className={[
+                      "app-sidebar__row",
+                      id === sessionId ? "app-sidebar__row--active" : "",
+                      sessionDragId === id ? "app-sidebar__row--dragging" : "",
+                      sessionDropTargetId === id
+                        ? "app-sidebar__row--drop-target"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onDragOver={(e) => handleSessionRowDragOver(e, id)}
+                    onDragLeave={handleSessionRowDragLeave}
+                    onDrop={(e) => handleSessionRowDrop(e, id)}
                   >
+                    <button
+                      type="button"
+                      className="app-sidebar__reorder-handle"
+                      draggable
+                      aria-label={`Reorder ${getDisplayNameForSession(id)}`}
+                      title="Drag to reorder"
+                      onDragStart={(e) => handleSessionDragHandleStart(e, id)}
+                      onDragEnd={endSessionDrag}
+                    >
+                      <GripVerticalIcon className="app-sidebar__reorder-handle-icon" />
+                    </button>
                     <button
                       type="button"
                       className="app-sidebar__row-main"
                       onClick={() => {
-                        setOpenMenuSessionId(null);
+                        closeSessionMenu();
+                        closeMobileSessions();
                         void selectSession(id);
                       }}
                     >
-                      <span className="app-sidebar__row-title">
-                        {getDisplayNameForSession(id)}
+                      <span className="app-sidebar__row-main-inner">
+                        {isSessionPinned(id) ? (
+                          <PinIcon className="app-sidebar__pin-icon" />
+                        ) : null}
+                        <span className="app-sidebar__row-title">
+                          {getDisplayNameForSession(id)}
+                        </span>
                       </span>
                     </button>
                     <div
@@ -760,36 +916,12 @@ function App() {
                         type="button"
                         className="app-sidebar__menu-trigger"
                         aria-label={`Actions for ${getDisplayNameForSession(id)}`}
-                        aria-expanded={openMenuSessionId === id}
+                        aria-expanded={sessionDropdown?.sessionId === id}
                         aria-haspopup="menu"
                         onClick={(e) => openSessionMenu(e, id)}
                       >
                         <MoreVerticalIcon className="app-sidebar__menu-trigger-icon" />
                       </button>
-                      {openMenuSessionId === id ? (
-                        <ul className="app-sidebar__dropdown" role="menu">
-                          <li role="none">
-                            <button
-                              type="button"
-                              className="app-sidebar__dropdown-item"
-                              role="menuitem"
-                              onClick={() => startRenameForSession(id)}
-                            >
-                              Rename
-                            </button>
-                          </li>
-                          <li role="none">
-                            <button
-                              type="button"
-                              className="app-sidebar__dropdown-item app-sidebar__dropdown-item--danger"
-                              role="menuitem"
-                              onClick={() => void confirmDeleteSession(id)}
-                            >
-                              Delete
-                            </button>
-                          </li>
-                        </ul>
-                      ) : null}
                     </div>
                   </div>
                 )}
@@ -798,136 +930,151 @@ function App() {
           </ul>
         </aside>
 
-        <div className="app-main">
+        <main
+          className="app-main"
+          id="main-chat"
+          tabIndex={-1}
+          ref={mainScrollRef}
+        >
+          <div className="app-mobile-bar">
+            <button
+              type="button"
+              className="app-mobile-bar__menu"
+              aria-expanded={mobileSessionsOpen}
+              aria-controls="sessions-drawer"
+              onClick={() => setMobileSessionsOpen((open) => !open)}
+            >
+              <MenuIcon className="app-mobile-bar__menu-icon" />
+              <span className="visually-hidden">Sessions and notebooks</span>
+            </button>
+          </div>
           <div
             className={
               mainDragActive
                 ? "app-main__scroll app-main__scroll--drag"
                 : "app-main__scroll"
             }
-            tabIndex={-1}
             aria-label="Conversation"
             onDragOver={handleMainDragOver}
             onDragLeave={handleMainDragLeave}
             onDrop={handleMainDrop}
           >
-            <div className="app-main__toolbar">
-              {sessionId ? (
-                <span className="app-main__crumb">{notebookTitle}</span>
+            <div className="app-main__content">
+              {initPhase === "loading" ? (
+                <div className="chat-state chat-state--loading" aria-busy="true">
+                  <div className="chat-state__spinner" aria-hidden />
+                  <p className="chat-state__title">Connecting to the API…</p>
+                  <p className="chat-state__text">
+                    Starting your workspace. If this hangs, check that the
+                    backend is running at{" "}
+                    <code className="inline-code">{API_BASE}</code>
+                  </p>
+                </div>
               ) : null}
-              {turns.length > 0 ? (
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm app-main__clear"
-                  onClick={clearChat}
-                >
-                  Clear chat
-                </button>
+
+              {initPhase === "error" ? (
+                <div className="chat-state chat-state--error" role="alert">
+                  <p className="chat-state__title">Could not start</p>
+                  <p className="chat-state__text">{initError}</p>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--sm chat-state__action"
+                                       onClick={() => {
+                      setInitPhase("loading");
+                      setInitError("");
+                      resetSessionBootstrap();
+                      void bootstrapSession(API_BASE)
+                        .then((result) => applyBootstrapSuccess(result))
+                        .catch((err: unknown) => {
+                          const msg =
+                            err instanceof Error
+                              ? err.message
+                              : "Could not reach the API.";
+                          setInitError(msg);
+                          setInitPhase("error");
+                        });
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
               ) : null}
-            </div>
 
-            {turns.length === 0 ? (
-              <p className="chat__empty">
-                Upload a .txt file (plus below or drag here), then ask a
-                question.
-              </p>
-            ) : null}
-
-            {turns.map((turn) => (
-              <article key={turn.id} className="chat__turn">
-                <div className="msg msg--user">
-                  <div className="msg__bubble msg__bubble--user">
-                    {turn.query}
+              {initPhase === "ready" && turns.length === 0 ? (
+                <div className="chat-empty">
+                  <div className="chat-empty__icon-wrap" aria-hidden>
+                    <DocumentIcon className="chat-empty__icon" />
                   </div>
+                  <h2 className="chat-empty__title">Start with a document</h2>
+                  <p className="chat-empty__lead">
+                    Upload a plain-text file, then ask questions grounded in
+                    your content.
+                  </p>
+                  <ol className="chat-empty__steps">
+                    <li>
+                      Use <strong>+</strong> below or drag a <strong>.txt</strong>{" "}
+                      file into this area.
+                    </li>
+                    <li>Wait for indexing to finish.</li>
+                    <li>
+                      Type a question and press{" "}
+                      <kbd className="kbd">Enter</kbd> to send (
+                      <kbd className="kbd">Shift</kbd>+<kbd className="kbd">
+                        Enter
+                      </kbd>{" "}
+                      for a new line).
+                    </li>
+                  </ol>
                 </div>
-                <div className="msg msg--assistant">
-                  {turn.status === "pending" ? (
-                    <div
-                      className="msg__bubble msg__bubble--assistant msg__bubble--loading"
-                      aria-busy="true"
-                    >
-                      <span className="msg__loading-dot" />
-                      <span className="msg__loading-dot" />
-                      <span className="msg__loading-dot" />
-                    </div>
-                  ) : null}
-                  {turn.status === "error" ? (
-                    <div className="msg__bubble msg__bubble--error">
-                      {turn.message}
-                    </div>
-                  ) : null}
-                  {turn.status === "done" ? (
-                    <>
-                      <div className="msg__bubble msg__bubble--assistant">
-                        <p className="msg__answer">{turn.answer}</p>
-                        <div className="msg__actions">
-                          <button
-                            type="button"
-                            className="btn btn--ghost btn--sm"
-                            onClick={() => copyAnswer(turn.id, turn.answer)}
-                          >
-                            {copyId === turn.id ? "Copied" : "Copy answer"}
-                          </button>
-                        </div>
-                      </div>
-                      {turn.sources.length > 0 ? (
-                        <details className="sources-details">
-                          <summary className="sources-details__summary">
-                            Sources ({turn.sources.length})
-                          </summary>
-                          <div className="sources-details__list">
-                            {turn.sources.map((source, index) => (
-                              <div className="source-card" key={index}>
-                                <p className="source-card__meta">
-                                  Doc {source.doc_id} · Chunk {source.chunk_id}
-                                </p>
-                                <p className="source-card__text">
-                                  {source.text}
-                                </p>
-                                {source.distance !== undefined ? (
-                                  <p className="source-card__score">
-                                    Distance:{" "}
-                                    {typeof source.distance === "number"
-                                      ? source.distance.toFixed(4)
-                                      : source.distance}
-                                  </p>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      ) : null}
-                    </>
-                  ) : null}
-                </div>
-              </article>
-            ))}
-            <div ref={chatEndRef} />
+              ) : null}
+
+              {initPhase === "ready"
+                ? turns.map((turn) => (
+                    <ChatTurnBlock
+                      key={turn.id}
+                      turn={turn}
+                      copyId={copyId}
+                      onCopyAnswer={copyAnswer}
+                      onRetryErrorTurn={retryErrorTurn}
+                      askLoading={askLoading}
+                    />
+                  ))
+                : null}
+              <div ref={chatEndRef} />
+            </div>
           </div>
 
           <div className="app-composer">
             {uploadMessage ? (
-              <p className="app-composer__status" role="status">
+              <p
+                className={`app-composer__status app-composer__status--${uploadStatusTone}`}
+                role={uploadStatusTone === "error" ? "alert" : "status"}
+                aria-live={uploadStatusTone === "error" ? "assertive" : "polite"}
+              >
                 {uploadLoading ? "Uploading… " : ""}
                 {uploadMessage}
               </p>
             ) : null}
-            <div className="app-composer__inner">
+            <div
+              className={`app-composer__inner ${initPhase !== "ready" || !sessionId ? "app-composer__inner--disabled" : ""}`}
+            >
               <input
                 ref={composerFileInputRef}
                 id={composerFileInputId}
                 type="file"
                 className="visually-hidden"
-                accept=".txt"
+                accept=".txt,text/plain"
                 onChange={handleComposerFileChange}
-                disabled={uploadLoading || !sessionId}
+                disabled={uploadLoading || !sessionId || initPhase !== "ready"}
               />
               <button
                 type="button"
                 className="app-composer__attach"
                 aria-label="Upload a .txt document"
                 title="Upload .txt"
-                disabled={uploadLoading || !sessionId}
+                disabled={
+                  uploadLoading || !sessionId || initPhase !== "ready"
+                }
                 onClick={() => composerFileInputRef.current?.click()}
               >
                 <PlusIcon className="app-composer__attach-icon" />
@@ -936,24 +1083,36 @@ function App() {
                 Your question
               </label>
               <textarea
+                ref={composerTextareaRef}
                 id="chat-input"
                 className="app-composer__input"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleTextareaKeyDown}
-                placeholder="Message…"
+                placeholder={
+                  initPhase !== "ready"
+                    ? "Waiting for connection…"
+                    : !sessionId
+                      ? "Select a notebook…"
+                      : "Ask about your documents…"
+                }
                 rows={1}
-                disabled={askLoading || !sessionId}
+                disabled={
+                  askLoading || !sessionId || initPhase !== "ready"
+                }
               />
               <button
                 type="button"
                 className="app-composer__send"
-                onClick={handleAsk}
-                disabled={askLoading || !query.trim() || !sessionId}
-                aria-label="Send"
-                title={
-                  isMac ? "Send (Cmd+Enter)" : "Send (Ctrl+Enter)"
+                onClick={() => void handleAsk()}
+                disabled={
+                  askLoading ||
+                  !query.trim() ||
+                  !sessionId ||
+                  initPhase !== "ready"
                 }
+                aria-label="Send"
+                title="Send (Enter)"
               >
                 {askLoading ? (
                   <span className="app-composer__send-loading" aria-hidden />
@@ -963,11 +1122,63 @@ function App() {
               </button>
             </div>
             <p className="app-composer__hint">
-              {isMac ? "Cmd+Enter" : "Ctrl+Enter"} to send · .txt only
+              Enter to send · Shift+Enter new line · Plain{" "}
+              <span className="app-composer__hint-strong">.txt</span> only
             </p>
           </div>
-        </div>
+        </main>
       </div>
+      {sessionDropdown
+        ? createPortal(
+            <div data-session-menu-root="">
+              <ul
+                className="app-sidebar__dropdown app-sidebar__dropdown--portal"
+                style={sessionMenuFixedStyle(sessionDropdown)}
+                role="menu"
+              >
+                <li role="none">
+                  <button
+                    type="button"
+                    className="app-sidebar__dropdown-item"
+                    role="menuitem"
+                    onClick={() =>
+                      togglePinForSession(sessionDropdown.sessionId)
+                    }
+                  >
+                    {isSessionPinned(sessionDropdown.sessionId)
+                      ? "Unpin"
+                      : "Pin"}
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    className="app-sidebar__dropdown-item"
+                    role="menuitem"
+                    onClick={() =>
+                      startRenameForSession(sessionDropdown.sessionId)
+                    }
+                  >
+                    Rename
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    className="app-sidebar__dropdown-item app-sidebar__dropdown-item--danger"
+                    role="menuitem"
+                    onClick={() =>
+                      requestDeleteSession(sessionDropdown.sessionId)
+                    }
+                  >
+                    Delete
+                  </button>
+                </li>
+              </ul>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

@@ -2,6 +2,8 @@
   --text: #6b6375;
   --text-h: #08060d;
   --bg: #fff;
+  --page-bg: #f7f7f9;
+  --page-dot: rgba(90, 90, 110, 0.085);
   --border: #e5e4e7;
   --code-bg: #f4f3ec;
   --accent: #aa3bff;
@@ -33,6 +35,8 @@
     --text: #9ca3af;
     --text-h: #f3f4f6;
     --bg: #16171d;
+    --page-bg: #14151a;
+    --page-dot: rgba(255, 255, 255, 0.065);
     --border: #2e303a;
     --code-bg: #1f2028;
     --accent: #c084fc;
@@ -51,6 +55,7 @@
   margin: 0;
   text-align: left;
   min-height: 100svh;
+  height: 100svh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -59,35 +64,14 @@
 body {
   margin: 0;
   min-height: 100svh;
-  background-color: var(--bg);
-  background-image:
-    radial-gradient(
-      ellipse 120% 90% at 50% -35%,
-      color-mix(in srgb, var(--accent) 16%, transparent),
-      transparent 55%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--code-bg) 45%, var(--bg)) 0%,
-      var(--bg) min(32rem, 55vh)
-    );
-  background-repeat: no-repeat;
-}
-
-@media (prefers-color-scheme: dark) {
-  body {
-    background-image:
-      radial-gradient(
-        ellipse 110% 85% at 50% -40%,
-        color-mix(in srgb, var(--accent) 22%, transparent),
-        transparent 58%
-      ),
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent) 6%, var(--bg)) 0%,
-        var(--bg) min(28rem, 50vh)
-      );
-  }
+  background-color: var(--page-bg);
+  background-image: radial-gradient(
+    circle at center,
+    var(--page-dot) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+  background-attachment: fixed;
 }
 
 h1,
